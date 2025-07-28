@@ -1,4 +1,5 @@
 import asyncio
+import platform
 from transformers import pipeline
 
 # Initialize CodeLlama for code generation and explanation
