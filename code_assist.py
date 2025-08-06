@@ -1,4 +1,5 @@
 import asyncio
+import gradio as gr
 from crewai import Agent, Task, Crew
 from transformers import pipeline
 
@@ -60,11 +61,12 @@ class CodingCrew:
 
         return Crew(agents=[coder, debugger, explainer], tasks=[code_task, debug_task, explain_task])
 
-    async def run(self, prompt, expected_output, max_attempts=3):
+    async def run(self, prompt, expected_output, want_explanation):
         crew = self.setup_crew(prompt, expected_output)
         attempt = 0
         code = None
         output = None
+        max_attempts = 3
 
         while attempt < max_attempts:
             result = await crew.kickoff_async()
@@ -76,15 +78,25 @@ class CodingCrew:
             crew = self.setup_crew(prompt, expected_output)
             attempt += 1
 
-        print(f"Code:\n{code}\nOutput: {output}")
-        user_wants_explanation = input("Want an explanation? (yes/no): ").lower() == "yes"
-        if user_wants_explanation:
-            explanation = result.tasks_output[2].output
-            print(f"Explanation:\n{explanation}")
+        explanation = result.tasks_output[2].output if want_explanation else ""
+        return f"**Code:**\n```python\n{code}\n```\n**Output:**\n{output}\n" + (f"**Explanation:**\n{explanation}" if want_explanation else "")
 
-async def main():
+def run_coding_crew(prompt, expected_output, want_explanation):
     crew = CodingCrew()
-    await crew.run("Write a Python function to reverse a string", "dlrow")
+    return asyncio.run(crew.run(prompt, expected_output, want_explanation))
 
-if __name__ == "__main__":
-    asyncio.run(main())
+with gr.Blocks() as demo:
+    gr.Markdown("# Coding Crew UI")
+    prompt_input = gr.Textbox(label="Enter your coding prompt", placeholder="e.g., Write a Python function to reverse a string")
+    expected_output_input = gr.Textbox(label="Expected Output", placeholder="e.g., dlrow")
+    explanation_checkbox = gr.Checkbox(label="Want an explanation?", value=False)
+    submit_button = gr.Button("Run")
+    output = gr.Markdown()
+
+    submit_button.click(
+        fn=run_coding_crew,
+        inputs=[prompt_input, expected_output_input, explanation_checkbox],
+        outputs=output
+    )
+
+demo.launch()
