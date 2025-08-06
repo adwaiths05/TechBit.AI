@@ -1,54 +1,90 @@
 import asyncio
-import platform
+from crewai import Agent, Task, Crew
 from transformers import pipeline
 
-# Initialize CodeLlama for code generation and explanation
-llm = pipeline("text-generation", model="codellama/CodeLlama-13b-hf", token="YOUR_HF_TOKEN")
+class CodingCrew:
+    def __init__(self):
+        self.llm = pipeline("text-generation", model="codellama/CodeLlama-13b-hf", token="YOUR_HF_TOKEN")
 
-# Generate code based on user prompt
-def generate_code(prompt):
-    result = llm(prompt, max_length=200, num_return_sequences=1)
-    return result[0]["generated_text"]
+    def generate_code(self, prompt):
+        result = self.llm(prompt, max_length=200, num_return_sequences=1)
+        return result[0]["generated_text"]
 
-# Execute code (mocked sandbox, replace with Pyodide for browser execution)
-async def execute_code(code, expected_output):
-    try:
-        # Mock execution using exec() for demo (use Pyodide in production)
-        local_vars = {}
-        exec(code, {}, local_vars)
-        result = local_vars.get("result", None)
-        return str(result) == str(expected_output), result
-    except Exception as e:
-        return False, str(e)
+    async def execute_code(self, code, expected_output):
+        try:
+            local_vars = {}
+            exec(code, {}, local_vars)
+            result = local_vars.get("result", None)
+            return str(result) == str(expected_output), result
+        except Exception as e:
+            return False, str(e)
 
-# Iteratively refine code until correct output
-async def refine_code(prompt, expected_output, max_attempts=3):
-    attempt = 0
-    code = generate_code(prompt)
-    while attempt < max_attempts:
-        success, output = await execute_code(code, expected_output)
-        if success:
-            return code, output
-        prompt += f"\nPrevious code failed with output: {output}. Fix it."
-        code = generate_code(prompt)
-        attempt += 1
-    return code, output
+    def setup_crew(self, prompt, expected_output):
+        coder = Agent(
+            role="Code Generator",
+            goal="Generate correct Python code for the given prompt",
+            backstory="Expert Python developer with debugging skills",
+            llm=self.llm
+        )
 
-# Main function for the coding agent
-async def main(prompt, expected_output):
-    # Generate and refine code
-    code, output = await refine_code(prompt, expected_output)
-    print(f"Code:\n{code}\nOutput: {output}")
+        debugger = Agent(
+            role="Code Debugger",
+            goal="Fix code to match expected output",
+            backstory="Specialist in identifying and resolving code errors",
+            llm=self.llm
+        )
 
-    # Ask for explanation
-    user_wants_explanation = input("Want an explanation? (yes/no): ").lower() == "yes"
-    if user_wants_explanation:
-        explanation = llm(f"Explain this code:\n{code}", max_length=200)[0]["generated_text"]
-        print(f"Explanation:\n{explanation}")
+        explainer = Agent(
+            role="Code Explainer",
+            goal="Provide clear explanations of code",
+            backstory="Technical writer skilled in simplifying complex code",
+            llm=self.llm
+        )
 
-# Run with Pyodide compatibility
-if platform.system() == "Emscripten":
-    asyncio.ensure_future(main("Write a Python function to reverse a string", "dlrow"))
-else:
-    if __name__ == "__main__":
-        asyncio.run(main("Write a Python function to reverse a string", "dlrow"))
+        code_task = Task(
+            description=f"Write a Python function for: {prompt}",
+            agent=coder,
+            expected_output=expected_output
+        )
+
+        debug_task = Task(
+            description="Debug and fix code to match expected output",
+            agent=debugger,
+            expected_output=expected_output
+        )
+
+        explain_task = Task(
+            description="Explain the final code in simple terms",
+            agent=explainer
+        )
+
+        return Crew(agents=[coder, debugger, explainer], tasks=[code_task, debug_task, explain_task])
+
+    async def run(self, prompt, expected_output, max_attempts=3):
+        crew = self.setup_crew(prompt, expected_output)
+        attempt = 0
+        code = None
+        output = None
+
+        while attempt < max_attempts:
+            result = await crew.kickoff_async()
+            code = result.tasks_output[0].output
+            success, output = await self.execute_code(code, expected_output)
+            if success:
+                break
+            prompt += f"\nPrevious code failed with output: {output}. Fix it."
+            crew = self.setup_crew(prompt, expected_output)
+            attempt += 1
+
+        print(f"Code:\n{code}\nOutput: {output}")
+        user_wants_explanation = input("Want an explanation? (yes/no): ").lower() == "yes"
+        if user_wants_explanation:
+            explanation = result.tasks_output[2].output
+            print(f"Explanation:\n{explanation}")
+
+async def main():
+    crew = CodingCrew()
+    await crew.run("Write a Python function to reverse a string", "dlrow")
+
+if __name__ == "__main__":
+    asyncio.run(main())
